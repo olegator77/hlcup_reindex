@@ -1,6 +1,7 @@
 LIBDIR    := reindexer
 
-CC_FILES  := $(wildcard *.cc) $(wildcard $(LIBDIR)/cmd/reindexer_server/http/*.cc) $(LIBDIR)/pprof/backtrace.cc
+CC_FILES  := $(wildcard *.cc) $(wildcard $(LIBDIR)/cmd/reindexer_server/http/*.cc) $(LIBDIR)/pprof/backtrace.cc $(LIBDIR)/tools/allocdebug.cc
+
 
 OBJ_FILES := $(patsubst %.cc, .build/%.o, $(CC_FILES))
 

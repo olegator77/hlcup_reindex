@@ -33,18 +33,19 @@ public:
 protected:
 	bool parseBodyToObject(http::Context &ctx, reindexer::Item *item, JsonAllocator &jallocator, char *body);
 	void mergeVisit(Item *visit);
-	void mergeVisitsByUser(Item *user);
-	void mergeVisitsByLocation(Item *location);
 	bool loadUsers();
 	bool loadLocations();
 	bool loadVisits();
 	bool loadOptions();
 	bool findFilesAndLoadToDB(const char *name, const char *ns);
 	void startWarmupRoutine();
+	void updateVisits();
 
 	shared_ptr<reindexer::Reindexer> db_;
 	string dataDir_;
 	int fakeNow_;
-	mutex wrLock_;
-	std::atomic<uint64_t> lastUpdated_;
+	std::atomic<uint64_t> lastUpdated_, lastPrintStats_;
+	vector<int> updatedVisits_, updatedUsers_, updatedLocations_;
+	mutex lockVisits_, lockUsers_, lockLocations_;
+	http::Router router;
 };

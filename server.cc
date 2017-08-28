@@ -14,7 +14,6 @@ Server::~Server() {}
 
 bool Server::Start(int port) {
 	ev::dynamic_loop loop;
-	http::Router router;
 
 	router.GET<Server, &Server::GetVisits>("/visits/", this);
 	router.GET<Server, &Server::GetUsers>("/users/", this);
@@ -23,8 +22,9 @@ bool Server::Start(int port) {
 	router.POST<Server, &Server::PostUsers>("/users/", this);
 	router.POST<Server, &Server::PostLocations>("/locations/", this);
 	router.GET<Server, &Server::GetQuery>("/query", this);
+	//	router.enableStats();
 
-	http::Listener listener(loop, router);
+	http::Listener listener(loop, router, 4);
 
 	if (!listener.Bind(port)) {
 		printf("Can't listen on %d port\n", port);
@@ -58,7 +58,8 @@ int Server::GetUsers(http::Context &ctx) {
 	int id = strtol(ctx.request->pathParams, &p, 10);
 
 	QueryResults res;
-	auto ret = db_->Select(Query("users").Where("id", CondEq, id), res);
+	auto q = Query("users").Where("id", CondEq, id);
+	auto ret = db_->Select(q, res);
 	if (!ret.ok() || res.size() != 1) {
 		return ctx.CString(http::StatusNotFound, ret.what().data());
 	}
@@ -90,21 +91,31 @@ int Server::GetLocations(http::Context &ctx) {
 }
 
 int Server::GetUserVisits(http::Context &ctx) {
-	char *p;
-	int userid = strtol(ctx.request->pathParams, &p, 10);
+	char *pend;
+	int userid = strtol(ctx.request->pathParams, &pend, 10);
 
 	QueryResults res;
 	auto q = Query("visits").Where("user", CondEq, userid).Sort("visited_at", false).Select({"mark", "place", "visited_at"});
 
 	for (auto p : ctx.request->params) {
+		int intval = strtol(p.val, &pend, 10);
 		if (!strcmp(p.name, "country")) {
-			q.Where("location_country", CondEq, p.val);
+			q.Where("country", CondEq, p.val);
 		} else if (!strcmp(p.name, "toDistance") && *p.val) {
-			q.Where("location_distance", CondLt, p.val);
+			if (*pend) {
+				return ctx.CString(http::StatusBadRequest, "Can't convert distance to number");
+			}
+			q.Where("distance", CondLt, intval);
 		} else if (!strcmp(p.name, "fromDate") && *p.val) {
-			q.Where("visited_at", CondGt, p.val);
+			if (*pend) {
+				return ctx.CString(http::StatusBadRequest, "Can't convert fromDate to number");
+			}
+			q.Where("visited_at", CondGt, intval);
 		} else if (!strcmp(p.name, "toDate") && *p.val) {
-			q.Where("visited_at", CondLt, p.val);
+			if (*pend) {
+				return ctx.CString(http::StatusBadRequest, "Can't convert toDate to number");
+			}
+			q.Where("visited_at", CondLt, intval);
 		}
 	}
 
@@ -125,7 +136,7 @@ int Server::GetUserVisits(http::Context &ctx) {
 	return ctx.JSON(http::StatusOK, wrSer.Buf(), wrSer.Len());
 }
 
-int years2unix(int age) { return age * 365 * 60 * 60 * 24 + (age / 4 * 60 * 60 * 24); }
+int years2unix(int age) { return age * 365 * 60 * 60 * 24 + ((age + 7) / 4 * 60 * 60 * 24); }
 
 int Server::GetLocationAvg(http::Context &ctx) {
 	char *pend;
@@ -135,27 +146,32 @@ int Server::GetLocationAvg(http::Context &ctx) {
 	auto q = Query("visits").Where("location", CondEq, locationid).Aggregate("mark", AggAvg);
 
 	for (auto p : ctx.request->params) {
+		int intval = strtol(p.val, &pend, 10);
 		if (!strcmp(p.name, "fromDate")) {
-			q.Where("visited_at", CondGt, p.val);
+			if (*pend) {
+				return ctx.CString(http::StatusBadRequest, "Can't convert fromDate to number");
+			}
+			q.Where("visited_at", CondGt, intval);
 		} else if (!strcmp(p.name, "toDate") && *p.val) {
-			q.Where("visited_at", CondLt, p.val);
+			if (*pend) {
+				return ctx.CString(http::StatusBadRequest, "Can't convert toDate to number");
+			}
+			q.Where("visited_at", CondLt, intval);
 		} else if (!strcmp(p.name, "gender") && *p.val) {
 			if (strcmp(p.val, "f") && strcmp(p.val, "m")) {
 				return ctx.CString(http::StatusBadRequest, "Invalid gender value");
 			}
-			q.Where("user_gender", CondEq, p.val);
+			q.Where("gender", CondEq, p.val);
 		} else if (!strcmp(p.name, "fromAge") && *p.val) {
-			int age = strtol(p.val, &pend, 10);
 			if (*pend) {
 				ctx.CString(http::StatusBadRequest, "Invalid fromAge value");
 			}
-			q.Where("user_birth_date", CondLt, fakeNow_ - years2unix(age));
+			q.Where("birth_date", CondLt, fakeNow_ - years2unix(intval));
 		} else if (!strcmp(p.name, "toAge") && *p.val) {
-			int age = strtol(p.val, &pend, 10);
 			if (*pend) {
 				return ctx.CString(http::StatusBadRequest, "Invalid toAge value");
 			}
-			q.Where("user_birth_date", CondGt, fakeNow_ - years2unix(age));
+			q.Where("birth_date", CondGt, fakeNow_ - years2unix(intval));
 		}
 	}
 
@@ -211,7 +227,7 @@ int Server::PostVisits(http::Context &ctx) {
 	ctx.writer->SetConnectionClose();
 
 	unique_ptr<Item> item;
-	lock_guard<mutex> lock(wrLock_);
+	lock_guard<mutex> lock(lockVisits_);
 
 	if (id >= 0) {
 		QueryResults res;
@@ -234,9 +250,11 @@ int Server::PostVisits(http::Context &ctx) {
 
 	if (id >= 0) {
 		item->SetField("id", (KeyRef)id);
+	} else {
+		id = (int)item->GetField("id");
 	}
+	updatedVisits_.push_back(id);
 
-	mergeVisit(item.get());
 	db_->Upsert("visits", item.get());
 	lastUpdated_ = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -252,7 +270,7 @@ int Server::PostUsers(http::Context &ctx) {
 
 	ctx.writer->SetConnectionClose();
 
-	lock_guard<mutex> lock(wrLock_);
+	lock_guard<mutex> lock(lockUsers_);
 
 	unique_ptr<Item> item;
 
@@ -276,9 +294,12 @@ int Server::PostUsers(http::Context &ctx) {
 	}
 	if (id >= 0) {
 		item->SetField("id", (KeyRef)id);
+	} else {
+		id = (int)item->GetField("id");
 	}
+	updatedUsers_.push_back(id);
+
 	db_->Upsert("users", item.get());
-	mergeVisitsByUser(item.get());
 	lastUpdated_ = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
 	return ctx.JSON(http::StatusOK, "{}", 2);
@@ -293,7 +314,7 @@ int Server::PostLocations(http::Context &ctx) {
 
 	ctx.writer->SetConnectionClose();
 
-	lock_guard<mutex> lock(wrLock_);
+	lock_guard<mutex> lock(lockLocations_);
 	unique_ptr<Item> item;
 
 	if (id >= 0) {
@@ -316,10 +337,12 @@ int Server::PostLocations(http::Context &ctx) {
 	}
 	if (id >= 0) {
 		item->SetField("id", (KeyRef)id);
+	} else {
+		id = (int)item->GetField("id");
 	}
+	updatedLocations_.push_back(id);
 
 	db_->Upsert("locations", item.get());
-	mergeVisitsByLocation(item.get());
 	lastUpdated_ = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 	return ctx.JSON(http::StatusOK, "{}", 2);
 }
@@ -339,46 +362,38 @@ void Server::mergeVisit(Item *visit) {
 	}
 	unique_ptr<Item> location(db_->GetItem("locations", res2[0].id));
 
-	visit->SetField("location_distance", location->GetField("distance"));
+	visit->SetField("distance", location->GetField("distance"));
 	visit->SetField("place", location->GetField("place"));
-	visit->SetField("location_country", location->GetField("country"));
-	visit->SetField("user_gender", user->GetField("gender"));
-	visit->SetField("user_birth_date", user->GetField("birth_date"));
+	visit->SetField("country", location->GetField("country"));
+	visit->SetField("gender", user->GetField("gender"));
+	visit->SetField("birth_date", user->GetField("birth_date"));
 }
 
-void Server::mergeVisitsByUser(Item *user) {
-	QueryResults res;
+void Server::updateVisits() {
+	auto q = Query("visits")
+				 .Where("id", CondSet, updatedVisits_)
+				 .Or()
+				 .Where("user", CondSet, updatedUsers_)
+				 .Or()
+				 .Where("location", CondSet, updatedLocations_);
 
-	auto ret = db_->Select(Query("visits").Where("user", CondEq, user->GetField("id")), res);
+	logPrintf(LogInfo, "Updating visits");
+	QueryResults res;
+	auto ret = db_->Select(q, res);
 	if (!ret.ok()) {
 		abort();
 	}
-
+	logPrintf(LogInfo, "Got %d visits for update", res.size());
 	for (auto r : res) {
 		unique_ptr<Item> visit(db_->GetItem("visits", r.id));
 		visit->Clone();
-		visit->SetField("user_gender", user->GetField("gender"));
-		visit->SetField("user_birth_date", user->GetField("birth_date"));
+		mergeVisit(visit.get());
 		db_->Upsert("visits", visit.get());
 	}
-}
-
-void Server::mergeVisitsByLocation(Item *location) {
-	QueryResults res;
-
-	auto ret = db_->Select(Query("visits").Where("location", CondEq, location->GetField("id")), res);
-	if (!ret.ok()) {
-		abort();
-	}
-
-	for (auto r : res) {
-		unique_ptr<Item> visit(db_->GetItem("visits", r.id));
-		visit->Clone();
-		visit->SetField("location_distance", location->GetField("distance"));
-		visit->SetField("place", location->GetField("place"));
-		visit->SetField("location_country", location->GetField("country"));
-		db_->Upsert("visits", visit.get());
-	}
+	logPrintf(LogInfo, "Done update visits");
+	updatedVisits_.clear();
+	updatedUsers_.clear();
+	updatedLocations_.clear();
 }
 
 bool Server::LoadData(const string &dataDir) {
@@ -425,12 +440,12 @@ bool Server::loadVisits() {
 	db_->AddIndex("visits", "visited_at", "visited_at", IndexInt);
 	db_->AddIndex("visits", "mark", "mark", IndexIntStore);
 
-	db_->AddIndex("visits", "location_distance", "location_distance", IndexIntStore);
-	db_->AddIndex("visits", "location_country", "location_country", IndexHash);
+	db_->AddIndex("visits", "distance", "distance", IndexIntStore);
+	db_->AddIndex("visits", "country", "country", IndexHash);
 	db_->AddIndex("visits", "place", "place", IndexStrStore);
 
-	db_->AddIndex("visits", "user_gender", "user_gender", IndexStrStore);
-	db_->AddIndex("visits", "user_birth_date", "user_birth_date", IndexIntStore);
+	db_->AddIndex("visits", "gender", "gender", IndexStrStore);
+	db_->AddIndex("visits", "birth_date", "birth_date", IndexIntStore);
 	return findFilesAndLoadToDB("visits", "visits");
 }
 
@@ -537,15 +552,21 @@ bool Server::parseBodyToObject(http::Context &ctx, Item *item, JsonAllocator &ja
 void Server::startWarmupRoutine() {
 	new std::thread([&]() {
 		for (;;) {
-			uint64_t t = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-			if (lastUpdated_.load() != 0 && t - lastUpdated_ > 3000) {
-				lock_guard<mutex> lock(wrLock_);
+			uint64_t now =
+				std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+			if (lastUpdated_ != 0 && now - lastUpdated_ > 3000) {
 				QueryResults res;
+				updateVisits();
 				logPrintf(LogInfo, "Start warming up");
 				db_->Select(Query("visits").Sort("visited_at", false), res);
 				logPrintf(LogInfo, "Finish warming up");
 				lastUpdated_ = 0;
 			}
+			// if (now - lastPrintStats_ > 2000) {
+			// 	if (lastPrintStats_ != 0) router.printStats();
+			// 	lastPrintStats_ = now;
+			// }
+
 			usleep(100000);
 		}
 	});

@@ -25,7 +25,7 @@ ADD . /src
 RUN apt-get -y install unzip
 
 WORKDIR src
-RUN make && make -j8 && make install && cd .. && rm -rf src
+RUN make -B -j8 && make install && cd .. && rm -rf src
 
 EXPOSE 80
 
@@ -33,6 +33,7 @@ EXPOSE 80
 RUN echo "#!/bin/bash\n" \
     "unzip -o /tmp/data/data.zip -d /go/data\n" \
     "cp /tmp/data/options.txt /go/data/options.txt\n" \
+    "cat /proc/cpuinfo\n" \
     "exec \"\$@\"\n" >/ep.sh && chmod +x /ep.sh
 
 RUN mkdir -p /go/data

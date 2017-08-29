@@ -7,6 +7,7 @@
 #include "cbinding/serializer.h"
 #include "http/listener.h"
 
+#define CUSTOM_JSON
 using namespace reindexer;
 
 Server::Server(shared_ptr<reindexer::Reindexer> db) : db_(db) {}
@@ -42,14 +43,36 @@ int Server::GetVisits(http::Context &ctx) {
 	int id = strtol(ctx.request->pathParams, &p, 10);
 
 	QueryResults res;
-	auto q = Query("visits").Where("id", CondEq, id).Select({"id", "location", "user", "visited_at", "mark"});
-	auto ret = db_->Select(q, res);
+	auto q = Query("visits").Where("id", CondEq, id);
+
+#ifndef CUSTOM_JSON
+	q.Select({"id", "location", "user", "visited_at", "mark"})
+#endif
+		auto ret = db_->Select(q, res);
 	if (!ret.ok() || res.size() != 1) {
 		return ctx.CString(http::StatusNotFound, ret.what().data());
 	}
 
 	WrSerializer wrSer(true);
+	auto &type = *res.ctxs[0].type_;
+
+#ifdef CUSTOM_JSON
+	ConstPayload pl(type, &res[0].data);
+	wrSer.PutChars("{\"id\":");
+	wrSer.Print((int)pl.Field(1).Get());  // id
+	wrSer.PutChars(",\"user\":");
+	wrSer.Print((int)pl.Field(2).Get());  // user
+	wrSer.PutChars(",\"location\":");
+	wrSer.Print((int)pl.Field(3).Get());  // location
+	wrSer.PutChars(",\"visited_at\":");
+	wrSer.Print((int)pl.Field(4).Get());  // visited_at
+	wrSer.PutChars(",\"mark\":");
+	wrSer.Print((int)pl.Field(5).Get());  // mark
+	wrSer.PutChars("}");
+#else
 	res.GetJSON(0, wrSer, false);
+#endif
+
 	return ctx.JSON(http::StatusOK, wrSer.Buf(), wrSer.Len());
 }
 
@@ -68,7 +91,24 @@ int Server::GetUsers(http::Context &ctx) {
 	}
 
 	WrSerializer wrSer(true);
+#ifdef CUSTOM_JSON
+	ConstPayload pl(*res.ctxs[0].type_, &res[0].data);
+	wrSer.PutChars("{\"id\":");
+	wrSer.Print((int)pl.Field(1).Get());  // id
+	wrSer.PutChars(",\"gender\":\"");
+	wrSer.PutChars(p_string(pl.Field(2).Get()).data());  // gender
+	wrSer.PutChars("\",\"first_name\":\"");
+	wrSer.PutChars(p_string(pl.Field(3).Get()).data());  // first_name
+	wrSer.PutChars("\",\"last_name\":\"");
+	wrSer.PutChars(p_string(pl.Field(4).Get()).data());  // last_name
+	wrSer.PutChars("\",\"birth_date\":");
+	wrSer.Print((int)pl.Field(5).Get());  // birth_date
+	wrSer.PutChars(",\"email\":\"");
+	wrSer.PutChars(p_string(pl.Field(6).Get()).data());  // email
+	wrSer.PutChars("\"}");
+#else
 	res.GetJSON(0, wrSer, false);
+#endif
 	return ctx.JSON(http::StatusOK, wrSer.Buf(), wrSer.Len());
 }
 
@@ -86,7 +126,23 @@ int Server::GetLocations(http::Context &ctx) {
 	}
 
 	WrSerializer wrSer(true);
+
+#ifdef CUSTOM_JSON
+	ConstPayload pl(*res.ctxs[0].type_, &res[0].data);
+	wrSer.PutChars("{\"id\":");
+	wrSer.Print((int)pl.Field(1).Get());  // id
+	wrSer.PutChars(",\"place\":\"");
+	wrSer.PutChars(p_string(pl.Field(2).Get()).data());  // place
+	wrSer.PutChars("\",\"city\":\"");
+	wrSer.PutChars(p_string(pl.Field(3).Get()).data());  // city
+	wrSer.PutChars("\",\"country\":\"");
+	wrSer.PutChars(p_string(pl.Field(4).Get()).data());  // country
+	wrSer.PutChars("\",\"distance\":");
+	wrSer.Print((int)pl.Field(5).Get());  // distance
+	wrSer.PutChars("}");
+#else
 	res.GetJSON(0, wrSer, false);
+#endif
 	return ctx.JSON(http::StatusOK, wrSer.Buf(), wrSer.Len());
 }
 
@@ -95,8 +151,11 @@ int Server::GetUserVisits(http::Context &ctx) {
 	int userid = strtol(ctx.request->pathParams, &pend, 10);
 
 	QueryResults res;
-	auto q = Query("visits").Where("user", CondEq, userid).Sort("visited_at", false).Select({"mark", "place", "visited_at"});
+	auto q = Query("visits").Where("user", CondEq, userid).Sort("visited_at", false);
 
+#ifdef CUSTOM_JSON
+	q.Select({"mark", "place", "visited_at"});
+#endif
 	for (auto p : ctx.request->params) {
 		int intval = strtol(p.val, &pend, 10);
 		if (!strcmp(p.name, "country")) {
@@ -126,17 +185,31 @@ int Server::GetUserVisits(http::Context &ctx) {
 
 	WrSerializer wrSer(true);
 	wrSer.PutChars("{\"visits\":[");
+	auto &type = *res.ctxs[0].type_;
+
 	for (size_t i = 0; i < res.size(); i++) {
 		if (i != 0) {
 			wrSer.PutChar(',');
 		}
+#ifdef CUSTOM_JSON
+		ConstPayload pl(type, &res[i].data);
+		wrSer.PutChars("{\"visited_at\":");
+		wrSer.Print((int)pl.Field(4).Get());  // visited_at
+		wrSer.PutChars(",\"mark\":");
+		wrSer.Print((int)pl.Field(5).Get());  // mark
+		wrSer.PutChars(",\"place\":\"");
+		wrSer.PutChars(p_string(pl.Field(8).Get()).data());  // place
+		wrSer.PutChars("\"}");
+#else
 		res.GetJSON(i, wrSer, false);
+#endif
 	}
 	wrSer.PutChars("]}");
 	return ctx.JSON(http::StatusOK, wrSer.Buf(), wrSer.Len());
 }
 
-int years2unix(int age) { return age * 365 * 60 * 60 * 24 + ((age + 7) / 4 * 60 * 60 * 24); }
+int years2unix(int age) { return age * 365 * 60 * 60 * 24 + ((age + 3) / 4 * 60 * 60 * 24); }
+double roundup(double v) { return (((int)floor(0.5 + v * 100000.))) / 100000.; }
 
 int Server::GetLocationAvg(http::Context &ctx) {
 	char *pend;
@@ -181,7 +254,7 @@ int Server::GetLocationAvg(http::Context &ctx) {
 	}
 
 	char tmpBuf[256];
-	int l = snprintf(tmpBuf, sizeof(tmpBuf), "{\"avg\":%g}", res.aggregationResults[0]);
+	int l = snprintf(tmpBuf, sizeof(tmpBuf), "{\"avg\":%g}", roundup(res.aggregationResults[0]));
 	return ctx.JSON(http::StatusOK, tmpBuf, l);
 }
 
@@ -367,9 +440,17 @@ void Server::mergeVisit(Item *visit) {
 	visit->SetField("country", location->GetField("country"));
 	visit->SetField("gender", user->GetField("gender"));
 	visit->SetField("birth_date", user->GetField("birth_date"));
+
+	// int64_t visited_at = (int)visit->GetField("visited_at");
+	// visit->SetField("visited_at_loc", KeyRef((visited_at << 32ULL) + (int)visit->GetField("location")));
+	// visit->SetField("visited_at_user", KeyRef((visited_at << 32ULL) + (int)visit->GetField("user")));
 }
 
 void Server::updateVisits() {
+	if (!updatedVisits_.size() && updatedUsers_.size() && !updatedUsers_.size()) {
+		return;
+	}
+
 	auto q = Query("visits")
 				 .Where("id", CondSet, updatedVisits_)
 				 .Or()
@@ -407,45 +488,45 @@ bool Server::LoadData(const string &dataDir) {
 	return ret;
 }
 
+IndexOpts oppk{0, 1};
 bool Server::loadUsers() {
 	db_->AddNamespace("users");
-
-	IndexOpts oppk{0, 1}, op{0, 0};
 	db_->AddIndex("users", "id", "id", IndexIntHash, &oppk);
-	db_->AddIndex("users", "gender", "gender", IndexStrStore, &op);
-	db_->AddIndex("users", "first_name", "first_name", IndexStrStore, &op);
-	db_->AddIndex("users", "last_name", "last_name", IndexStrStore, &op);
-	db_->AddIndex("users", "birth_date", "birth_date", IndexIntStore, &op);
-	db_->AddIndex("users", "email", "email", IndexStrStore, &op);
+	db_->AddIndex("users", "gender", "gender", IndexStrStore);
+	db_->AddIndex("users", "first_name", "first_name", IndexStrStore);
+	db_->AddIndex("users", "last_name", "last_name", IndexStrStore);
+	db_->AddIndex("users", "birth_date", "birth_date", IndexIntStore);
+	db_->AddIndex("users", "email", "email", IndexStrStore);
 	return findFilesAndLoadToDB("users", "users");
 }
 
 bool Server::loadLocations() {
 	db_->AddNamespace("locations");
-	IndexOpts oppk{0, 1}, op{0, 0};
 	db_->AddIndex("locations", "id", "id", IndexIntHash, &oppk);
-	db_->AddIndex("locations", "place", "place", IndexStrStore, &op);
-	db_->AddIndex("locations", "city", "city", IndexStrStore, &op);
-	db_->AddIndex("locations", "country", "country", IndexStrStore, &op);
-	db_->AddIndex("locations", "distance", "distance", IndexIntStore, &op);
+	db_->AddIndex("locations", "place", "place", IndexStrStore);
+	db_->AddIndex("locations", "city", "city", IndexStrStore);
+	db_->AddIndex("locations", "country", "country", IndexStrStore);
+	db_->AddIndex("locations", "distance", "distance", IndexIntStore);
 	return findFilesAndLoadToDB("locations", "locations");
 }
 
 bool Server::loadVisits() {
 	db_->AddNamespace("visits");
-	IndexOpts oppk{0, 1}, op{0, 0};
 	db_->AddIndex("visits", "id", "id", IndexIntHash, &oppk);
-	db_->AddIndex("visits", "user", "user", IndexIntHash, &op);
-	db_->AddIndex("visits", "location", "location", IndexIntHash, &op);
+	db_->AddIndex("visits", "user", "user", IndexIntHash);
+	db_->AddIndex("visits", "location", "location", IndexIntHash);
 	db_->AddIndex("visits", "visited_at", "visited_at", IndexInt);
-	db_->AddIndex("visits", "mark", "mark", IndexIntStore);
 
+	db_->AddIndex("visits", "mark", "mark", IndexIntStore);
 	db_->AddIndex("visits", "distance", "distance", IndexIntStore);
 	db_->AddIndex("visits", "country", "country", IndexHash);
 	db_->AddIndex("visits", "place", "place", IndexStrStore);
-
 	db_->AddIndex("visits", "gender", "gender", IndexStrStore);
 	db_->AddIndex("visits", "birth_date", "birth_date", IndexIntStore);
+	//	db_->AddIndex("visits", "visited_at+location", "", IndexComposite);
+	// db_->AddIndex("visits", "visited_at_loc", "visited_at_loc", IndexInt64);
+	// db_->AddIndex("visits", "visited_at_user", "visited_at_user", IndexInt64);
+
 	return findFilesAndLoadToDB("visits", "visits");
 }
 
@@ -558,7 +639,7 @@ void Server::startWarmupRoutine() {
 				QueryResults res;
 				updateVisits();
 				logPrintf(LogInfo, "Start warming up");
-				db_->Select(Query("visits").Sort("visited_at", false), res);
+				db_->Select(Query("visits").Sort("visited_at", false).Limit(1), res);
 				logPrintf(LogInfo, "Finish warming up");
 				lastUpdated_ = 0;
 			}
@@ -567,7 +648,7 @@ void Server::startWarmupRoutine() {
 			// 	lastPrintStats_ = now;
 			// }
 
-			usleep(100000);
+			usleep(1000000);
 		}
 	});
 }

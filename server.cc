@@ -7,7 +7,6 @@
 #include "cbinding/serializer.h"
 #include "http/listener.h"
 
-#define CUSTOM_JSON
 using namespace reindexer;
 
 Server::Server(shared_ptr<reindexer::Reindexer> db) : db_(db) {}
@@ -23,10 +22,11 @@ bool Server::Start(int port) {
 	router.POST<Server, &Server::PostUsers>("/users/", this);
 	router.POST<Server, &Server::PostLocations>("/locations/", this);
 	router.GET<Server, &Server::GetQuery>("/query", this);
-	//	router.enableStats();
+	router.enableStats();
 
 	http::Listener listener(loop, router, 4);
 
+	listener.Fork(3);
 	if (!listener.Bind(port)) {
 		printf("Can't listen on %d port\n", port);
 		return false;
@@ -46,17 +46,17 @@ int Server::GetVisits(http::Context &ctx) {
 	auto q = Query("visits").Where("id", CondEq, id);
 
 #ifndef CUSTOM_JSON
-	q.Select({"id", "location", "user", "visited_at", "mark"})
+	q.Select({"id", "location", "user", "visited_at", "mark"});
 #endif
-		auto ret = db_->Select(q, res);
+	auto ret = db_->Select(q, res);
 	if (!ret.ok() || res.size() != 1) {
 		return ctx.CString(http::StatusNotFound, ret.what().data());
 	}
 
 	WrSerializer wrSer(true);
-	auto &type = *res.ctxs[0].type_;
 
 #ifdef CUSTOM_JSON
+	auto &type = *res.ctxs[0].type_;
 	ConstPayload pl(type, &res[0].data);
 	wrSer.PutChars("{\"id\":");
 	wrSer.Print((int)pl.Field(1).Get());  // id
@@ -153,7 +153,7 @@ int Server::GetUserVisits(http::Context &ctx) {
 	QueryResults res;
 	auto q = Query("visits").Where("user", CondEq, userid).Sort("visited_at", false);
 
-#ifdef CUSTOM_JSON
+#ifndef CUSTOM_JSON
 	q.Select({"mark", "place", "visited_at"});
 #endif
 	for (auto p : ctx.request->params) {
@@ -185,13 +185,13 @@ int Server::GetUserVisits(http::Context &ctx) {
 
 	WrSerializer wrSer(true);
 	wrSer.PutChars("{\"visits\":[");
-	auto &type = *res.ctxs[0].type_;
 
 	for (size_t i = 0; i < res.size(); i++) {
 		if (i != 0) {
 			wrSer.PutChar(',');
 		}
 #ifdef CUSTOM_JSON
+		auto &type = *res.ctxs[0].type_;
 		ConstPayload pl(type, &res[i].data);
 		wrSer.PutChars("{\"visited_at\":");
 		wrSer.Print((int)pl.Field(4).Get());  // visited_at
@@ -523,7 +523,9 @@ bool Server::loadVisits() {
 	db_->AddIndex("visits", "place", "place", IndexStrStore);
 	db_->AddIndex("visits", "gender", "gender", IndexStrStore);
 	db_->AddIndex("visits", "birth_date", "birth_date", IndexIntStore);
-	//	db_->AddIndex("visits", "visited_at+location", "", IndexComposite);
+
+	// OOM for this cool indexes :(
+	// db_->AddIndex("visits", "visited_at+location", "", IndexComposite);
 	// db_->AddIndex("visits", "visited_at_loc", "visited_at_loc", IndexInt64);
 	// db_->AddIndex("visits", "visited_at_user", "visited_at_user", IndexInt64);
 
@@ -643,10 +645,10 @@ void Server::startWarmupRoutine() {
 				logPrintf(LogInfo, "Finish warming up");
 				lastUpdated_ = 0;
 			}
-			// if (now - lastPrintStats_ > 2000) {
-			// 	if (lastPrintStats_ != 0) router.printStats();
-			// 	lastPrintStats_ = now;
-			// }
+			if (now - lastPrintStats_ > 2000) {
+				if (lastPrintStats_ != 0) router.printStats();
+				lastPrintStats_ = now;
+			}
 
 			usleep(1000000);
 		}

@@ -8,7 +8,7 @@ OBJ_FILES := $(patsubst %.cc, .build/%.o, $(CC_FILES))
 HLCUP_REINDEX := hlcup_reindex
 
 CXXFLAGS  := -I$(LIBDIR) -I$(LIBDIR)/vendor -I$(LIBDIR)/cmd/reindexer_server -std=c++11 -g -O3 -Wall -Wpedantic -Wextra
-LDFLAGS   :=  -L$(LIBDIR)/.build -lreindexer -lleveldb -lsnappy -lev -lpthread -lprofiler
+LDFLAGS   :=  -L$(LIBDIR)/.build -lreindexer -lleveldb -lsnappy -lev -lpthread
 
 CXXFLAGS := $(CXXFLAGS) -DCUSTOM_JSON
 

@@ -22,7 +22,7 @@ bool Server::Start(int port) {
 	router.POST<Server, &Server::PostUsers>("/users/", this);
 	router.POST<Server, &Server::PostLocations>("/locations/", this);
 	router.GET<Server, &Server::GetQuery>("/query", this);
-	router.enableStats();
+	// router.enableStats();
 
 	http::Listener listener(loop, router, 4);
 

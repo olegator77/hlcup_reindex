@@ -1,0 +1,3 @@
+[submodule "reindexer"]
+	path = reindexer
+	url = http://github.com/olegator77/reindexer

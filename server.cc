@@ -1,7 +1,9 @@
 
 #include "server.h"
 #include <dirent.h>
+#include <signal.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <thread>
 #include "cbinding/serializer.h"
@@ -22,15 +24,18 @@ bool Server::Start(int port) {
 	router.POST<Server, &Server::PostUsers>("/users/", this);
 	router.POST<Server, &Server::PostLocations>("/locations/", this);
 	router.GET<Server, &Server::GetQuery>("/query", this);
-	// router.enableStats();
+	//	router.enableStats();
 
 	http::Listener listener(loop, router, 4);
 
-	listener.Fork(3);
 	if (!listener.Bind(port)) {
 		printf("Can't listen on %d port\n", port);
 		return false;
 	}
+	listener.Fork(3);
+
+	mlockall(MCL_CURRENT);
+	signal(SIGPIPE, SIG_IGN);
 
 	listener.Run();
 	printf("listener::Run exited\n");
@@ -299,8 +304,9 @@ int Server::PostVisits(http::Context &ctx) {
 
 	ctx.writer->SetConnectionClose();
 
-	unique_ptr<Item> item;
 	lock_guard<mutex> lock(lockVisits_);
+	unique_ptr<Item> item;
+	string jsonTmpl("{\"user\": 0, \"location\": 0, \"visited_at\": 0, \"id\": 0, \"mark\": 1, \"place\":\"\"}");
 
 	if (id >= 0) {
 		QueryResults res;
@@ -312,7 +318,7 @@ int Server::PostVisits(http::Context &ctx) {
 		item->Clone();
 	} else {
 		item.reset(db_->NewItem("visits"));
-		item->FromJSON(string("{\"user\": 0, \"location\": 0, \"visited_at\": 0, \"id\": 0, \"mark\": 1, \"place\":\"\"}"));
+		item->FromJSON(jsonTmpl);
 	}
 
 	JsonAllocator jallocator;
@@ -346,6 +352,7 @@ int Server::PostUsers(http::Context &ctx) {
 	lock_guard<mutex> lock(lockUsers_);
 
 	unique_ptr<Item> item;
+	string jsonTmpl("{\"first_name\": \"\", \"last_name\": \"\", \"birth_date\": 0, \"gender\": \"\", \"id\": 0, \"email\": \"\"}");
 
 	if (id >= 0) {
 		QueryResults res;
@@ -357,8 +364,7 @@ int Server::PostUsers(http::Context &ctx) {
 		item->Clone();
 	} else {
 		item.reset(db_->NewItem("users"));
-		item->FromJSON(
-			string("{\"first_name\": \"\", \"last_name\": \"\", \"birth_date\": 0, \"gender\": \"\", \"id\": 0, \"email\": \"\"}"));
+		item->FromJSON(jsonTmpl);
 	}
 	JsonAllocator jallocator;
 	char *body = (char *)alloca(ctx.body->Pending() + 1);
@@ -389,6 +395,7 @@ int Server::PostLocations(http::Context &ctx) {
 
 	lock_guard<mutex> lock(lockLocations_);
 	unique_ptr<Item> item;
+	string jsonTmpl("{\"distance\":0, \"city\": \"\", \"place\": \"\", \"id\": 0, \"country\": \"\"}");
 
 	if (id >= 0) {
 		QueryResults res;
@@ -400,7 +407,7 @@ int Server::PostLocations(http::Context &ctx) {
 		item->Clone();
 	} else {
 		item.reset(db_->NewItem("locations"));
-		item->FromJSON(string("{\"distance\":0, \"city\": \"\", \"place\": \"\", \"id\": 0, \"country\": \"\"}"));
+		item->FromJSON(jsonTmpl);
 	}
 
 	JsonAllocator jallocator;
@@ -574,8 +581,8 @@ bool Server::findFilesAndLoadToDB(const char *name, const char *ns) {
 		auto data = loadFile((dataDir_ + "/" + dp->d_name).c_str());
 		logPrintf(LogInfo, "Loadind %s(%d) bytes", dp->d_name, (int)data.size());
 
+		unique_ptr<reindexer::Item> it(db_->NewItem(ns));
 		for (char *end = &data.at(1), *beg = strchr(end, '{'); beg; beg = strchr(end, '{')) {
-			unique_ptr<reindexer::Item> it(db_->NewItem(ns));
 			end = strchr(beg, '}') + 1;
 			*end++ = 0;
 			char tmpBuf[2048];
@@ -633,24 +640,37 @@ bool Server::parseBodyToObject(http::Context &ctx, Item *item, JsonAllocator &ja
 }
 
 void Server::startWarmupRoutine() {
-	new std::thread([&]() {
+	auto th = new std::thread([&]() {
+		int cnt = 0;
 		for (;;) {
 			uint64_t now =
 				std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-			if (lastUpdated_ != 0 && now - lastUpdated_ > 3000) {
+			if (lastUpdated_ != 0 && now - lastUpdated_ > 1000) {
+				ev::gEnableBusyLoop = false;
 				QueryResults res;
 				updateVisits();
+				cnt++;
 				logPrintf(LogInfo, "Start warming up");
 				db_->Select(Query("visits").Sort("visited_at", false).Limit(1), res);
-				logPrintf(LogInfo, "Finish warming up");
+				logPrintf(LogInfo, "Finish warming up %d", cnt);
 				lastUpdated_ = 0;
+				ev::gEnableBusyLoop = true;
+				if (cnt == 1) {
+					logPrintf(LogInfo, "Running wrk");
+					int ret = system("wrk -d1s -t1 -c1000 http://127.0.0.1/");
+					logPrintf(LogInfo, "Wrk finished, ret = %d,err=%d", ret, errno);
+				}
+				if (cnt == 2) {
+					return;
+				}
 			}
 			if (now - lastPrintStats_ > 2000) {
 				if (lastPrintStats_ != 0) router.printStats();
 				lastPrintStats_ = now;
 			}
 
-			usleep(1000000);
+			usleep(100000);
 		}
 	});
+	th->detach();
 }

@@ -20,9 +20,9 @@ RUN curl -L http://dist.schmorp.de/libev/libev-4.24.tar.gz | tar xzv && \
     make install && \
     cd .. && rm -rf libev-4.24
 
-ADD . /src
+RUN apt-get -y install unzip libgoogle-perftools-dev
 
-RUN apt-get -y install unzip
+ADD . /src
 
 WORKDIR src
 RUN make -B -j8 && make install && cd .. && rm -rf src
@@ -31,9 +31,8 @@ EXPOSE 80
 
 # Create entry point script
 RUN echo "#!/bin/bash\n" \
-    "unzip -o /tmp/data/data.zip -d /go/data\n" \
+    "unzip -o /tmp/data/data.zip -d /go/data >/dev/null 2>&1\n" \
     "cp /tmp/data/options.txt /go/data/options.txt\n" \
-    "cat /proc/cpuinfo\n" \
     "exec \"\$@\"\n" >/ep.sh && chmod +x /ep.sh
 
 RUN mkdir -p /go/data

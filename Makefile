@@ -7,10 +7,19 @@ OBJ_FILES := $(patsubst %.cc, .build/%.o, $(CC_FILES))
 
 HLCUP_REINDEX := hlcup_reindex
 
-CXXFLAGS  := -I$(LIBDIR) -I$(LIBDIR)/vendor -I$(LIBDIR)/cmd/reindexer_server -std=c++11 -g -O3 -Wall -Wpedantic -Wextra
-LDFLAGS   :=  -L$(LIBDIR)/.build -lreindexer -lleveldb -lsnappy -lev -lpthread
+CXXFLAGS  := -I$(LIBDIR) -I$(LIBDIR)/vendor -I$(LIBDIR)/cmd/reindexer_server -std=c++11 -Wall -Wpedantic -Wextra -g
+LDFLAGS   :=  -L$(LIBDIR)/.build -lreindexer -lleveldb -lsnappy -lev -lpthread -ltcmalloc
 
-CXXFLAGS := $(CXXFLAGS) -DCUSTOM_JSON
+CXXFLAGS := $(CXXFLAGS) -DCUSTOM_JSON 
+
+ifeq ($(DEBUG_BUILD),1)
+CXXFLAGS    := $(CXXFLAGS) -fsanitize=address -O0
+LDFLAGS     := $(LDFLAGS) -fsanitize=address
+else
+CXXFLAGS    := $(CXXFLAGS) -O3 -DNDEBUG -Ofast
+CFLAGS      := $(CFLAGS) -O3 -DNDEBUG -Ofast
+endif
+
 
 all: $(HLCUP_REINDEX)
 
